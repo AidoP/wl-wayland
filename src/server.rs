@@ -449,7 +449,7 @@ impl wayland::WlShmPool for Lease<WlShmPool> {
             return Err(DisplayError::method(self, format!("Cannot resize wl_shm_pool to be smaller. Previous size was {}b, requested is {}b.", size, pool.size)))
         }
         use libc::*;
-        let buffer = unsafe { mremap(std::ptr::null_mut(), pool.size, size, MREMAP_MAYMOVE) };
+        let buffer = unsafe { mremap(pool.buffer, pool.size, size, MREMAP_MAYMOVE) };
         if buffer == MAP_FAILED {
             let error = std::io::Error::last_os_error();
             let message = format!("Unable to resize mmapping for fd {}: {}", pool.fd, error);
