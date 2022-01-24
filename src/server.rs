@@ -90,31 +90,31 @@ macro_rules! error {
                 }
             }
             $(
-                pub fn $constructor(object: &dyn Object $(, $field: $field_ty)*) -> Error {
+                pub fn $constructor(object: &dyn Object $(, $field: $field_ty)*) -> ::wl::server::Error {
                     Self::$err_name { object: object.object() $(, $field)* }.into()
                 } 
             )*
         }
-        impl ErrorHandler for $name {
-            fn handle(&mut self, client: &mut Client) -> Result<()> {
-                let mut display = WlDisplay::get(client)?;
+        impl ::wl::server::ErrorHandler for $name {
+            fn handle(&mut self, client: &mut ::wl::server::Client) -> ::wl::server::Result<()> {
+                let mut display = $crate::server::WlDisplay::get(client)?;
                 {
-                    use wayland::WlDisplay;
+                    use $crate::server::wayland::WlDisplay;
                     display.error(client, &self.object(), self.code(), &format!("{}", self))?;
-                    Err(wl::SystemError::Other(format!("{}", self).into()).into())
+                    ::std::result::Result::Err(::wl::SystemError::Other(format!("{}", self).into()).into())
                 }
             }
         }
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 match self {
-                    $(Self::$err_name { $($field,)* ..} => write!(f, $format, $($field = $field),*)),*
+                    $(Self::$err_name { $($field,)* ..} => ::std::write!(f, $format, $($field = $field),*)),*
                 }
             }
         }
-        impl Into<Error> for $name {
-            fn into(self) -> Error {
-                Error::Protocol(Box::new(self))
+        impl ::std::convert::Into<::wl::server::Error> for $name {
+            fn into(self) -> ::wl::server::Error {
+                ::wl::server::Error::Protocol(::std::boxed::Box::new(self))
             }
         }
     };
