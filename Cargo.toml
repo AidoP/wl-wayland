@@ -13,6 +13,7 @@ global-derive-macro = { path = "global-derive-macro" }
 
 [features]
 # Allow clients to use unsealed file descriptors for shared memory
-# Introduces complexity and potential security risks as the client
-# may manipulate the backing shm files if unsealed
+# Introduces complexity and potential security risks as well as a 
+# lot of questionable unsafe code.
+# Unfortunately most clients may require unsealed memory
 unsealed_shm = []
