@@ -9,6 +9,7 @@ pub mod prelude {
     /// Derive macro to simplify the implementation of Global interfaces
     pub use global_derive_macro::ServerGlobal as Global;
     pub use super::{
+        error,
         drop_handler,
         wayland,
         OnBind,
@@ -37,47 +38,105 @@ pub mod wayland {
     type WlShmPool = super::WlShmPool;
     type WlBuffer = super::WlBuffer;
 }
-/// A server error type representing core wayland errors that will be signalled to the client
-pub struct DisplayError {
-    object: u32,
-    code: u32,
-    message: String
-}
-impl DisplayError {
-    pub fn method(object: &dyn Object, message: String) -> Error {
-        Error::Protocol(Box::new(Self {
-            object: object.object(),
-            code: wayland::WlDisplayError::INVALID_METHOD,
-            message
-        }))
-    }
-    pub fn out_of_memory(object: &dyn Object, message: String) -> Error {
-        Error::Protocol(Box::new(Self {
-            object: object.object(),
-            code: wayland::WlDisplayError::NO_MEMORY,
-            message
-        }))
-    }
-}
-impl ErrorHandler for DisplayError {
-    fn handle(&mut self, client: &mut Client) -> Result<()> {
-        let mut display = WlDisplay::get(client)?;
-        {
-            use wayland::WlDisplay;
-            display.error(client, &self.object, self.code, &self.message)?;
-            Err(wl::SystemError::Other(format!("{}", self).into()).into())
+/// Define error types that leverage the `wl_display.error` event.
+/// 
+/// ```rust
+/// use wl_wayland::server::error;
+/// use wl_wayland::WlDisplayError
+/// error! {
+///     ExampleDisplayError {
+///         Implementation = wayland:WlDisplayError::IMPLEMENTATION => implementation {
+///             "file descriptor is invalid, {reason}",
+///             reason: String
+///         },
+///         NoMemory = WlDisplayError::NO_MEMORY => out_of_memory {
+///             "the system is out of memory, {reason}",
+///             reason: String
+///         },
+///         InvalidObject = WlDisplayError::INVALID_OBJECT => unknown_object {
+///             "no object found with the id {id}",
+///             id: u32
+///         },
+///         InvalidMethod = WlDisplayError::INVALID_METHOD => method {
+///             "malformed request could not be processed, {reason}",
+///             reason: String
+///         }
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! error {
+    ($name:ident { $($err_name:ident = $err_val:expr => $constructor:ident {
+        $format:expr
+        $(,$field:ident: $field_ty:ty)*
+    }),* }) => {
+        pub enum $name {
+            $(
+                $err_name {
+                    object: u32,
+                    $($field: $field_ty),*
+                }
+            ),*
         }
-    }
+        impl $name {
+            pub fn code(&self) -> u32 {
+                match self {
+                    $(Self::$err_name {..} => $err_val),*
+                }
+            }
+            pub fn object(&self) -> u32 {
+                match self {
+                    $(Self::$err_name { object, ..} => *object),*
+                }
+            }
+            $(
+                pub fn $constructor(object: &dyn Object $(, $field: $field_ty)*) -> Error {
+                    Self::$err_name { object: object.object() $(, $field)* }.into()
+                } 
+            )*
+        }
+        impl ErrorHandler for $name {
+            fn handle(&mut self, client: &mut Client) -> Result<()> {
+                let mut display = WlDisplay::get(client)?;
+                {
+                    use wayland::WlDisplay;
+                    display.error(client, &self.object(), self.code(), &format!("{}", self))?;
+                    Err(wl::SystemError::Other(format!("{}", self).into()).into())
+                }
+            }
+        }
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    $(Self::$err_name { $($field,)* ..} => write!(f, $format, $($field = $field),*)),*
+                }
+            }
+        }
+        impl Into<Error> for $name {
+            fn into(self) -> Error {
+                Error::Protocol(Box::new(self))
+            }
+        }
+    };
 }
-impl fmt::Display for DisplayError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use wayland::WlDisplayError;
-        match self.code {
-            WlDisplayError::IMPLEMENTATION => write!(f, "Internal error within the compositor, {}", self.message),
-            WlDisplayError::NO_MEMORY => write!(f, "The compositor is out of memory, {}", self.message),
-            WlDisplayError::INVALID_OBJECT => write!(f, "The requested object was not found, {}", self.message),
-            WlDisplayError::INVALID_METHOD => write!(f, "Malformed request could not be processed, {}", self.message),
-            _ => write!(f, "Unknown error on object {}, {}", self.object, self.message)
+pub use error;
+error! {
+    DisplayError {
+        Implementation = wayland::WlDisplayError::IMPLEMENTATION => implementation {
+            "file descriptor is invalid, {reason}",
+            reason: String
+        },
+        NoMemory = wayland::WlDisplayError::NO_MEMORY => out_of_memory {
+            "the system is out of memory, {reason}",
+            reason: String
+        },
+        InvalidObject = wayland::WlDisplayError::INVALID_OBJECT => unknown_object {
+            "no object found with the id {id}",
+            id: u32
+        },
+        InvalidMethod = wayland::WlDisplayError::INVALID_METHOD => method {
+            "malformed request could not be processed, {reason}",
+            reason: String
         }
     }
 }
@@ -314,61 +373,20 @@ macro_rules! wl_formats {
 }
 wl_formats!{ARGB8888, XRGB8888, C8, RGB332, BGR233, XRGB4444, XBGR4444, RGBX4444, BGRX4444, ARGB4444, ABGR4444, RGBA4444, BGRA4444, XRGB1555, XBGR1555, RGBX5551, BGRX5551, ARGB1555, ABGR1555, RGBA5551, BGRA5551, RGB565, BGR565, RGB888, BGR888, XBGR8888, RGBX8888, BGRX8888, ABGR8888, RGBA8888, BGRA8888, XRGB2101010, XBGR2101010, RGBX1010102, BGRX1010102, ARGB2101010, ABGR2101010, RGBA1010102, BGRA1010102, YUYV, YVYU, UYVY, VYUY, AYUV, NV12, NV21, NV16, NV61, YUV410, YVU410, YUV411, YVU411, YUV420, YVU420, YUV422, YVU422, YUV444, YVU444, R8, R16, RG88, GR88, RG1616, GR1616, XRGB16161616F, XBGR16161616F, ARGB16161616F, ABGR16161616F, XYUV8888, VUY888, VUY101010, Y210, Y212, Y216, Y410, Y412, Y416, XVYU2101010, XVYU12_16161616, XVYU16161616, Y0L0, X0L0, Y0L2, X0L2, YUV420_8BIT, YUV420_10BIT, XRGB8888_A8, XBGR8888_A8, RGBX8888_A8, BGRX8888_A8, RGB888_A8, BGR888_A8, RGB565_A8, BGR565_A8, NV24, NV42, P210, P010, P012, P016, AXBXGXRX106106106106, NV15, Q410, Q401 }
 
-pub enum ShmError {
-    InvalidFileDescriptor {
-        object: u32,
-        reason: String
-    },
-    InvalidFormat {
-        object: u32,
-        format: u32
-    },
-    InvalidStride {
-        object: u32,
-        stride: u32,
-    }
-}
-impl ShmError {
-    pub fn code(&self) -> u32 {
-        match self {
-            Self::InvalidFileDescriptor {..} => wayland::WlShmError::INVALID_FD,
-            Self::InvalidFormat {..} => wayland::WlShmError::INVALID_FORMAT,
-            Self::InvalidStride {..} => wayland::WlShmError::INVALID_STRIDE
+error! {
+    ShmError {
+        InvalidFileDescriptor = wayland::WlShmError::INVALID_FD => fd {
+            "invalid file descriptor, {reason}",
+            reason: String
+        },
+        InvalidFormat = wayland::WlShmError::INVALID_FORMAT => format {
+            "format {format} is unsupported", 
+            format: u32
+        },
+        InvalidStride = wayland::WlShmError::INVALID_STRIDE => stride {
+            "stride of {stride} is invalid",
+            stride: u32
         }
-    }
-    pub fn object(&self) -> u32 {
-        match self {
-            Self::InvalidFileDescriptor { object, ..} => *object,
-            Self::InvalidFormat { object, ..} => *object,
-            Self::InvalidStride { object, ..} => *object,
-        }
-    }
-    pub fn fd(object: &dyn Object, reason: String) -> Error {
-        Self::InvalidFileDescriptor { object: object.object(), reason }.into()
-    }
-}
-impl ErrorHandler for ShmError {
-    fn handle(&mut self, client: &mut Client) -> Result<()> {
-        let mut display = WlDisplay::get(client)?;
-        {
-            use wayland::WlDisplay;
-            display.error(client, &self.object(), self.code(), &format!("{}", self))?;
-            Err(wl::SystemError::Other(format!("{}", self).into()).into())
-        }
-    }
-}
-impl fmt::Display for ShmError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidFileDescriptor { reason, ..} => write!(f, "file descriptor is invalid, {}", reason),
-            Self::InvalidFormat { format, ..} => write!(f, "format {} is unsupported", format),
-            Self::InvalidStride { stride, ..} => write!(f, "stride of {} is invalid", stride)
-        }
-    }
-}
-impl Into<Error> for ShmError {
-    fn into(self) -> Error {
-        Error::Protocol(Box::new(self))
     }
 }
 
@@ -416,6 +434,7 @@ struct ShmPool {
     buffer: *mut libc::c_void,
     size: usize,
     fd: i32,
+    #[cfg(feature = "unsealed_shm")]
     did_fault: bool,
     #[cfg(feature = "unsealed_shm")]
     can_sigbus: bool
@@ -482,6 +501,7 @@ impl WlShmPool {
             fd: file.into_raw_fd(),
             size,
             buffer,
+            #[cfg(feature = "unsealed_shm")]
             did_fault: false,
             #[cfg(feature = "unsealed_shm")]
             can_sigbus
